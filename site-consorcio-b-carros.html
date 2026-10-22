@@ -3020,7 +3020,7 @@ updateChrome();
   var scrEl = function () { return document.getElementById('screen'); };
   function hash(s) { var h = 0, n = s.length; for (var i = 0; i < n; i += 331) h = (h * 31 + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36) + n.toString(36); }
   /* chave da tela atual: fc@<nó> ; folha aberta: sheet~fc@<tela por baixo>#<folha> */
-  function key() { var c = state.cur, b = state.base; if (!c) return SCR + '@' + FLOW.start; return (c.kind === 'overlay' && b && b !== c) ? 'sheet~' + SCR + '@' + b.id + '#' + c.id : SCR + '@' + c.id; }
+  function key() { var c = state.cur, b = state.base; if (!c) return SCR + '@' + FLOW.start; return (c.kind === 'overlay' && b && b !== c) ? 'sheet~' + SCR + '@' + b.id + '#' + c.id : SCR + '@' + c.id + (tok ? '#' + tok : ''); }
   function sig() { var c = state.cur, b = state.base; return hash(((b && b.img) || '') + '|' + ((c && c !== b && c.img) || '')); }
   var last = null;
   function post(ev) { if (REC) window.parent.postMessage({ hsf: 1, ev: ev }, '*'); }
@@ -3029,11 +3029,83 @@ updateChrome();
   window.HSF_KEY = key; window.HSF_SIG = sig;
   window.__topBg = function () { return [255, 255, 255]; };
   window.HSF_BACK = function () { if (state.history.length) { goBack(); return true; } return false; };   /* gesto de voltar do iPhone */
-  var _uc = updateChrome; updateChrome = function () { var r = _uc.apply(this, arguments); try { view(); } catch (e) {} return r; };
+
+  /* ===== estado dos componentes (lista aberta, acordeão, aba, valores) =====
+     Compara a tela com o desenho inicial dela. Só entram no estado coisas que mudam o tamanho ou o conteúdo da tela
+     (lista aberta, acordeão, aba). Os valores escolhidos (crédito, prazo…) vão junto, mas texto digitado nunca é gravado. */
+  var UIW = '.bh-dd,.acc,.coll,.coll > *,.st-tabs button';
+  var INIT_SH = JSON.parse(JSON.stringify((typeof FLOW !== 'undefined' && FLOW.shared) || {}));
+  var PRIS = {}, settling = true, tok = '', shj = '{}', curBase = '', stT = 0, obT = 0, lastPtr = 0, navAt = 0;
+  ['pointerdown', 'pointerup', 'keydown', 'input'].forEach(function (t) { document.addEventListener(t, function () { lastPtr = performance.now(); }, true); });
+  function layerEl() { return document.querySelector('.base-scroll > .layer'); }
+  function pathOf(el, root) { var p = []; while (el && el !== root) { var par = el.parentElement; if (!par) return null; p.unshift(Array.prototype.indexOf.call(par.children, el)); el = par; } return p.join('.'); }
+  function byPath(root, p) { if (p === '' || p == null) return root; var e = root, a = String(p).split('.'); for (var i = 0; i < a.length && e; i++) e = e.children[+a[i]]; return e || null; }
+  function snapUI() { var o = {}, r = layerEl(); if (!r) return o; r.querySelectorAll(UIW).forEach(function (e) { var p = pathOf(e, r); if (p !== null) o['L:' + p] = [typeof e.className === 'string' ? e.className : '', e.getAttribute('style') || '', e.classList.contains('coll') ? Math.round(e.getBoundingClientRect().height) : 0]; }); return o; }
+  function deltaUI() { var cur = snapUI(), d = {}; Object.keys(cur).forEach(function (k) { var a = PRIS[k]; if (a && (a[0] !== cur[k][0] || a[1] !== cur[k][1])) d[k] = cur[k]; }); return d; }
+  function hOf(st) { var m = /height:\s*calc\(var\(--u\)\s*\*\s*([\d.]+)\)/.exec(st || ''); return m ? +m[1] : null; }
+  function idxOf(root, sel, el) { return Array.prototype.indexOf.call(root.querySelectorAll(sel), el) + 1; }
+  function hashS(s) { var h = 5381; for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(16).slice(-6); }
+  /* o que mudou e merece nome: vira o "estado" no mapa de calor */
+  function namesOf(d) {
+    var out = [], root = layerEl(); if (!root) return out, out;
+    var colls = [];   /* seções recolhíveis: o que importa é a altura da seção, não qual dos dois blocos aparece */
+    Object.keys(d).forEach(function (k) { var e0 = byPath(root, k.split(':')[1]); if (e0 && e0.parentElement && e0.parentElement.classList.contains('coll') && colls.indexOf(e0.parentElement) < 0) colls.push(e0.parentElement); });
+    colls.forEach(function (cl) { var pk = 'L:' + pathOf(cl, root), q0 = (PRIS[pk] || [])[2] || 0, q1 = Math.round(cl.getBoundingClientRect().height); if (Math.abs(q1 - q0) > 4) out.push('Seção ' + idxOf(root, '.coll', cl) + (q1 < q0 ? ' recolhida' : ' expandida')); });
+    Object.keys(d).forEach(function (k) {
+      var el = byPath(root, k.split(':')[1]); if (!el) return; var now = d[k], was = PRIS[k] || ['', ''], c = el.classList, wasOpen = /(^|\s)open(\s|$)/.test(was[0]);
+      if (c.contains('bh-dd')) { if (c.contains('open') && !wasOpen) { var sb = root.querySelector('.bh-select'), lab = ((sb && sb.getAttribute('aria-label')) || 'valores').replace(/^Selecione (um|uma) /i, ''); out.push('Lista de ' + lab + ' aberta'); } }
+      else if (c.contains('acc')) { if (c.contains('open') !== wasOpen) out.push('Acordeão ' + idxOf(root, '.acc', el) + (c.contains('open') ? ' aberto' : ' fechado')); }
+      else if (el.tagName === 'BUTTON' && el.parentElement && el.parentElement.classList.contains('st-tabs')) { if (c.contains('on') && !/(^|\s)on(\s|$)/.test(was[0])) out.push('Aba «' + (el.textContent || '').trim().slice(0, 24) + '»'); }
+    });
+    return out.sort();
+  }
+  /* valores escolhidos: só o que mudou em relação ao início, sem texto longo */
+  function diffObj(a, b) {
+    var out = null; Object.keys(b || {}).forEach(function (k) {
+      var x = a ? a[k] : undefined, y = b[k];
+      if (y && typeof y === 'object' && !Array.isArray(y)) { var dd = diffObj(x && typeof x === 'object' ? x : {}, y); if (dd) { out = out || {}; out[k] = dd; } }
+      else if (JSON.stringify(x) !== JSON.stringify(y)) { var js = JSON.stringify(y); if (js === undefined || js.length > 300 || (typeof y === 'string' && y.length > 40)) return; out = out || {}; out[k] = y; }
+    }); return out;
+  }
+  function shDiff() { return diffObj(INIT_SH, (typeof FLOW !== 'undefined' && FLOW.shared) || {}); }
+  function checkUI() {
+    if (settling || STATIC) return; var c = state.cur; if (!c || c.kind === 'overlay') return;   /* na página estática o estado vem pronto da URL */
+    var d = deltaUI(), nm = namesOf(d), nt = nm.length ? 'ui_' + hashS(curBase + '|' + nm.join('|')) : '', sh = shDiff(), sj = JSON.stringify(sh || {});
+    if (nt === tok && sj === shj) return;
+    /* valores que o próprio protótipo preenche ao abrir a tela não são escolha do participante: viram o ponto de partida */
+    if (nt === tok && sj !== shj && lastPtr <= navAt + 400) { INIT_SH = JSON.parse(JSON.stringify((typeof FLOW !== 'undefined' && FLOW.shared) || {})); shj = '{}'; return; }
+    var troca = nt !== tok; tok = nt; shj = sj;
+    post({ type: 'ui', key: key(), tk: tok, n: nm.join(' · '), d: tok ? d : undefined, sh: sh || undefined });
+    if (troca) view();
+  }
+  /* a tela mudou: o desenho inicial dela vira a referência (depois de assentar as animações) */
+  function navUI() {
+    var c = state.cur, nb = c && c.kind !== 'overlay' ? c.id : null; if (!nb || nb === curBase) return;
+    curBase = nb; tok = ''; navAt = performance.now(); settling = true; clearTimeout(stT); stT = setTimeout(function () { PRIS = snapUI(); settling = false; }, 320);
+  }
+  (function () { var ct = document.getElementById('content'); if (!ct || !window.MutationObserver) return;
+    new MutationObserver(function () { clearTimeout(obT); obT = setTimeout(checkUI, 140); }).observe(ct, { subtree: true, attributes: true, attributeFilter: ['class', 'style'], childList: true }); })();
+  /* rótulo e valor de um slider, lidos do próprio componente (nada digitado) */
+  function sliderInfo(tg) {
+    var w = tg.closest('.st-slider,.st-track,.sm-track'), n = w && w.parentElement; while (n && !n.querySelector('input.st-num')) n = n.parentElement;
+    if (!n) return { label: w && w.classList.contains('sm-track') ? 'slider do lance' : 'slider', val: '' };
+    var inp = n.querySelector('input.st-num'), v = inp ? String(inp.value || '').replace(/\D/g, '') : '', cls = typeof n.className === 'string' ? n.className : '', tab = n.querySelector('.st-tabs button.on'),
+        mode = /(^|\s)prazo(\s|$)/.test(cls) ? 'prazo' : /(^|\s)parcela(\s|$)/.test(cls) ? 'parcela' : (tab ? tab.getAttribute('data-m') : (n.querySelector('.st-tabs') ? 'parcela' : ''));
+    var val = !v ? '' : mode === 'prazo' ? v + ' meses' : mode === 'parcela' ? 'R$ ' + v : v;
+    return { label: 'slider ' + (mode === 'prazo' ? 'do prazo' : mode === 'parcela' ? 'da parcela' : '') + (val ? ' → ' + val : ''), val: val };
+  }
+  var _uc = updateChrome; updateChrome = function () { var r = _uc.apply(this, arguments); try { navUI(); view(); } catch (e) {} return r; };
 
   function lab(el) {
     if (el.classList && el.classList.contains('overlay-dim')) return 'Fechar (fora da folha)';
     var r = el.dataset && el.dataset.r; if (r) return r.slice(0, 60);
+    var cl = el.classList;
+    if (cl.contains('acc-head')) return 'accordion ' + ((el.parentNode && el.parentNode.dataset && el.parentNode.dataset.r) || idxOf(layerEl() || document, '.acc', el.parentNode));
+    if (cl.contains('parc-head')) return 'accordion Parcela mensal';
+    if (cl.contains('sm-head')) return 'Simulador (fechar)'; if (cl.contains('sm-closed')) return 'Simulador (abrir)';
+    if (cl.contains('sm-track')) return 'slider do lance'; if (cl.contains('sm-input')) return 'campo do lance';
+    if (cl.contains('sticky-bar')) return 'barra fixa → ' + ((state.cur.sticky && (byId[state.cur.sticky.dest] || {}).name) || '');
+    if (cl.contains('coll-head')) return 'seção ' + idxOf(layerEl() || document, '.coll', el.closest('.coll'));
     var al = el.getAttribute('aria-label') || el.getAttribute('title'); if (al) return al.slice(0, 60);
     var tx = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' '); if (tx) return tx.slice(0, 44);
     return 'Elemento sem nome';
@@ -3044,7 +3116,9 @@ updateChrome();
     document.addEventListener('pointercancel', function () { d0 = null; }, true);
     document.addEventListener('pointerup', function (e) {
       var o = d0; d0 = null; if (!o) return;
-      if (Math.max(window.__gmax || 0, Math.hypot(e.clientX - o.x, e.clientY - o.y)) > 10 || performance.now() - o.t > 800) return;
+      var dist = Math.max(window.__gmax || 0, Math.hypot(e.clientX - o.x, e.clientY - o.y)), isSl = !!(o.tg.closest && o.tg.closest('.st-slider,.st-track,.sm-track'));
+      if (!isSl && (dist > 10 || performance.now() - o.t > 800)) return;
+      if (isSl) { o.x = e.clientX; o.y = e.clientY; }   /* no arrasto, o ponto é onde o dedo terminou */
       var r = scrEl().getBoundingClientRect(), x = o.x - r.left, tg = o.tg, y, fixed, ab = false, sc = document.querySelector('.base-scroll');
       var inSheet = tg.closest('.overlay-sheet'), inDim = tg.closest('.overlay-dim'), inBar = tg.closest('.sticky-bar');
       if (inSheet || inDim || inBar) { y = o.y - r.top; fixed = true; ab = !!(inSheet || inBar); }
@@ -3053,6 +3127,7 @@ updateChrome();
       var el = tg.closest(INTER), hit = !!el;
       var ev = { type: 'tap', key: o.key, x: Math.round(x), xf: +(x / r.width).toFixed(4), y: Math.round(y), fixed: fixed, hit: hit, act: hit ? 'fx' : '', label: hit ? lab(el) : 'Sem ação' };
       if (ab) { ev.ab = 1; ev.yb = Math.round(r.bottom - o.y); }
+      if (isSl) { setTimeout(function () { var si = sliderInfo(tg); ev.label = si.label; ev.hit = true; ev.act = 'fx'; if (si.val) ev.val = si.val; if (dist > 10) ev.drag = true; post(ev); }, 90); return; }
       post(ev);
     }, true);
     var sst = 0;
@@ -3062,12 +3137,18 @@ updateChrome();
     }, true);
   }
   /* página estática (espelho e mapa de calor) e ponto de partida (?start=<nó>) */
+  function b64d(t) { t = String(t).replace(/-/g, '+').replace(/_/g, '/'); while (t.length % 4) t += '='; return decodeURIComponent(escape(atob(t))); }
+  function mergeSh(dst, src) { Object.keys(src).forEach(function (k) { if (src[k] && typeof src[k] === 'object' && !Array.isArray(src[k]) && dst[k] && typeof dst[k] === 'object') mergeSh(dst[k], src[k]); else dst[k] = src[k]; }); }
+  var UIS = null; if (STATIC && Q.get('ui')) { try { UIS = JSON.parse(b64d(Q.get('ui'))); } catch (e) {} }
+  function applyUI() { var root = layerEl(); if (!UIS || !UIS.d || !root) return; Object.keys(UIS.d).forEach(function (k) { var el = byPath(root, k.split(':')[1]); if (el) { el.className = UIS.d[k][0]; if (UIS.d[k][1]) el.setAttribute('style', UIS.d[k][1]); else el.removeAttribute('style'); } }); }
   if (STATIC) {
     var base = byId[Q.get('cur')] || byId[FLOW.start], sel = Q.get('sel');
+    if (UIS && UIS.sh && typeof FLOW !== 'undefined') { FLOW.shared = FLOW.shared || {}; mergeSh(FLOW.shared, UIS.sh); }
     state.history = []; state.base = base; state.cur = base; renderBase(base, null);
     if (SHEET && sel && byId[sel] && byId[sel].kind === 'overlay') { state.cur = byId[sel]; renderOverlay(byId[sel]); }
     clearAuto();   /* telas de carregamento avançam sozinhas: na página estática ficam paradas */
     updateChrome();
+    if (UIS && !SHEET) { clearTimeout(stT); settling = false; curBase = base.id; PRIS = snapUI(); applyUI(); setTimeout(applyUI, 250); setTimeout(applyUI, 700); tok = Q.get('sel') || ''; }
   } else {
     var st0 = Q.get('start');
     if (st0 && byId[st0] && byId[st0].kind !== 'overlay') { state.history = []; state.base = state.cur = byId[st0]; renderBase(byId[st0], null); updateChrome(); }
