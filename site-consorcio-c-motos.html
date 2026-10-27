@@ -3177,6 +3177,10 @@ updateChrome();
     }); return out;
   }
   function shDiff() { return diffObj(INIT_SH, (typeof FLOW !== 'undefined' && FLOW.shared) || {}); }
+  /* espelho ao vivo: o estado compartilhado do simulador inteiro (o que as telas seguintes precisam para se desenhar, como o resultado da simulação) */
+  var allj = '';
+  function allSnap() { try { var j = JSON.stringify((typeof FLOW !== 'undefined' && FLOW.shared) || {}); return j.length < 6000 ? JSON.parse(j) : undefined; } catch (e) { return undefined; } }
+  function emitAll() { if (STATIC) return; var a = allSnap(); if (!a) return; var j = JSON.stringify(a); if (j === allj) return; allj = j; post({ type: 'ui', key: key(), tk: tok, n: '', all: a }); }
   function checkUI() {
     if (settling || STATIC) return; var c = state.cur; if (!c || c.kind === 'overlay') return;   /* na página estática o estado vem pronto da URL */
     var d = deltaUI(), nm = namesOf(d), nt = nm.length ? 'ui_' + hashS(curBase + '|' + nm.join('|')) : '', sh = shDiff(), sj = JSON.stringify(sh || {});
@@ -3184,13 +3188,13 @@ updateChrome();
     /* valores que o próprio protótipo preenche ao abrir a tela não são escolha do participante: viram o ponto de partida */
     if (nt === tok && sj !== shj && lastPtr <= navAt + 400) { INIT_SH = JSON.parse(JSON.stringify((typeof FLOW !== 'undefined' && FLOW.shared) || {})); shj = '{}'; return; }
     var troca = nt !== tok; tok = nt; shj = sj;
-    post({ type: 'ui', key: key(), tk: tok, n: nm.join(' · '), d: tok ? d : undefined, sh: sh || undefined });
+    post({ type: 'ui', key: key(), tk: tok, n: nm.join(' · '), d: tok ? d : undefined, sh: sh || undefined, all: allSnap() }); allj = JSON.stringify(allSnap() || {});
     if (troca) view();
   }
   /* a tela mudou: o desenho inicial dela vira a referência (depois de assentar as animações) */
   function navUI() {
     var c = state.cur, nb = c && c.kind !== 'overlay' ? c.id : null; if (!nb || nb === curBase) return;
-    curBase = nb; tok = ''; navAt = performance.now(); settling = true; clearTimeout(stT); stT = setTimeout(function () { PRIS = snapUI(); settling = false; }, 320);
+    curBase = nb; tok = ''; navAt = performance.now(); settling = true; clearTimeout(stT); stT = setTimeout(function () { PRIS = snapUI(); settling = false; emitAll(); }, 320);
   }
   (function () { var ct = document.getElementById('content'); if (!ct || !window.MutationObserver) return;
     new MutationObserver(function () { clearTimeout(obT); obT = setTimeout(checkUI, 140); }).observe(ct, { subtree: true, attributes: true, attributeFilter: ['class', 'style'], childList: true }); })();
@@ -3252,12 +3256,20 @@ updateChrome();
   function applyUI() { var root = layerEl(); if (!UIS || !UIS.d || !root) return; Object.keys(UIS.d).forEach(function (k) { var el = byPath(root, k.split(':')[1]); if (el) { el.className = UIS.d[k][0]; if (UIS.d[k][1]) el.setAttribute('style', UIS.d[k][1]); else el.removeAttribute('style'); } }); }
   if (STATIC) {
     var base = byId[Q.get('cur')] || byId[FLOW.start], sel = Q.get('sel');
+    var SH0 = JSON.parse(JSON.stringify((typeof FLOW !== 'undefined' && FLOW.shared) || {}));   /* escolhas iniciais do protótipo (para o espelho poder voltar a elas) */
     if (UIS && UIS.sh && typeof FLOW !== 'undefined') { FLOW.shared = FLOW.shared || {}; mergeSh(FLOW.shared, UIS.sh); }
     state.history = []; state.base = base; state.cur = base; renderBase(base, null);
     if (SHEET && sel && byId[sel] && byId[sel].kind === 'overlay') { state.cur = byId[sel]; renderOverlay(byId[sel]); }
     clearAuto();   /* telas de carregamento avançam sozinhas: na página estática ficam paradas */
     updateChrome();
     if (UIS && !SHEET) { clearTimeout(stT); settling = false; curBase = base.id; PRIS = snapUI(); applyUI(); setTimeout(applyUI, 250); setTimeout(applyUI, 700); tok = Q.get('sel') || ''; }
+    /* espelho ao vivo: o painel chama isto a cada escolha do participante (valor de crédito, prazo, lista aberta...) em vez de recarregar o arquivo inteiro */
+    window.HSF_SETUI = function (u) {
+      if (SHEET) return; UIS = (u && (u.d || u.sh)) ? u : null;
+      if (typeof FLOW !== 'undefined') { FLOW.shared = FLOW.shared || {}; Object.keys(FLOW.shared).forEach(function (k) { delete FLOW.shared[k]; }); mergeSh(FLOW.shared, JSON.parse(JSON.stringify(SH0))); if (UIS && UIS.sh) mergeSh(FLOW.shared, UIS.sh); }
+      state.history = []; state.base = base; state.cur = base; renderBase(base, null); clearAuto(); updateChrome();
+      clearTimeout(stT); settling = false; curBase = base.id; PRIS = snapUI(); applyUI(); setTimeout(applyUI, 250); setTimeout(applyUI, 700); tok = '';
+    };
   } else {
     var st0 = Q.get('start');
     if (st0 && byId[st0] && byId[st0].kind !== 'overlay') { state.history = []; state.base = state.cur = byId[st0]; renderBase(byId[st0], null); updateChrome(); }
