@@ -3170,22 +3170,27 @@ updateChrome();
   function shDiff() { return diffObj(INIT_SH, (typeof FLOW !== 'undefined' && FLOW.shared) || {}); }
   /* espelho ao vivo: o estado compartilhado do simulador inteiro (o que as telas seguintes precisam para se desenhar, como o resultado da simulação) */
   var allj = '';
-  function allSnap() { try { var j = JSON.stringify((typeof FLOW !== 'undefined' && FLOW.shared) || {}); return j.length < 6000 ? JSON.parse(j) : undefined; } catch (e) { return undefined; } }
+  /* estado da própria tela (modelo escolhido, acordeões, cores, simulador, seções) e posição das faixas que rolam para o lado: vão junto, para o espelho redesenhar igual */
+  var HX = {}, hxT = 0;
+  function nodeSt() { var c = state.base || state.cur, o = null; if (!c) return null; ['accState', 'simState', 'colorState', 'collState'].forEach(function (k) { if (c[k] != null) { o = o || { id: c.id }; o[k] = c[k]; } }); return o; }
+  function shrink(v, d) { if (d > 8 || v === null || v === undefined) return v; if (typeof v === 'string') return v.indexOf('data:') === 0 && v.length > 300 ? '@@h:' + hashS(v) + ':' + v.length : v; if (typeof v !== 'object') return v; if (Array.isArray(v)) return v.map(function (x) { return shrink(x, d + 1); }); var o = {}; Object.keys(v).forEach(function (k) { o[k] = shrink(v[k], d + 1); }); return o; }
+  function allSnap() { try { var o = shrink(JSON.parse(JSON.stringify((typeof FLOW !== 'undefined' && FLOW.shared) || {})), 0), ns = nodeSt(); if (ns) o.__ns = shrink(JSON.parse(JSON.stringify(ns)), 0); if (Object.keys(HX).length) o.__hx = JSON.parse(JSON.stringify(HX)); return JSON.stringify(o).length < 20000 ? o : undefined; } catch (e) { return undefined; } }
+  document.addEventListener('scroll', function (e) { if (STATIC) return; var el = e.target, r = layerEl(); if (!el || el.nodeType !== 1 || !r || !r.contains(el) || el.scrollWidth <= el.clientWidth + 2) return; var p = pathOf(el, r); if (p === null) return; HX[p] = Math.round(el.scrollLeft); clearTimeout(hxT); hxT = setTimeout(emitAll, 300); }, true);
   function emitAll() { if (STATIC) return; var a = allSnap(); if (!a) return; var j = JSON.stringify(a); if (j === allj) return; allj = j; post({ type: 'ui', key: key(), tk: tok, n: '', all: a }); }
   function checkUI() {
-    if (settling || STATIC) return; var c = state.cur; if (!c || c.kind === 'overlay') return;   /* na página estática o estado vem pronto da URL */
+    if (settling || STATIC) return; var c = state.cur; if (!c || c.kind === 'overlay') return; emitAll();   /* na página estática o estado vem pronto da URL */
     var d = deltaUI(), nm = namesOf(d), nt = nm.length ? 'ui_' + hashS(curBase + '|' + nm.join('|')) : '', sh = shDiff(), sj = JSON.stringify(sh || {});
     if (nt === tok && sj === shj) return;
     /* valores que o próprio protótipo preenche ao abrir a tela não são escolha do participante: viram o ponto de partida */
     if (nt === tok && sj !== shj && lastPtr <= navAt + 400) { INIT_SH = JSON.parse(JSON.stringify((typeof FLOW !== 'undefined' && FLOW.shared) || {})); shj = '{}'; return; }
     var troca = nt !== tok; tok = nt; shj = sj;
-    post({ type: 'ui', key: key(), tk: tok, n: nm.join(' · '), d: tok ? d : undefined, sh: sh || undefined, all: allSnap() }); allj = JSON.stringify(allSnap() || {});
+    post({ type: 'ui', key: key(), tk: tok, n: nm.join(' · '), d: tok ? d : undefined, sh: sh ? shrink(sh, 0) : undefined, all: allSnap() }); allj = JSON.stringify(allSnap() || {});
     if (troca) view();
   }
   /* a tela mudou: o desenho inicial dela vira a referência (depois de assentar as animações) */
   function navUI() {
     var c = state.cur, nb = c && c.kind !== 'overlay' ? c.id : null; if (!nb || nb === curBase) return;
-    curBase = nb; tok = ''; navAt = performance.now(); settling = true; clearTimeout(stT); stT = setTimeout(function () { PRIS = snapUI(); settling = false; emitAll(); }, 320);
+    curBase = nb; tok = ''; HX = {}; navAt = performance.now(); settling = true; clearTimeout(stT); stT = setTimeout(function () { PRIS = snapUI(); settling = false; emitAll(); }, 320);
   }
   (function () { var ct = document.getElementById('content'); if (!ct || !window.MutationObserver) return;
     new MutationObserver(function () { clearTimeout(obT); obT = setTimeout(checkUI, 140); }).observe(ct, { subtree: true, attributes: true, attributeFilter: ['class', 'style'], childList: true }); })();
@@ -3248,18 +3253,24 @@ updateChrome();
   if (STATIC) {
     var base = byId[Q.get('cur')] || byId[FLOW.start], sel = Q.get('sel');
     var SH0 = JSON.parse(JSON.stringify((typeof FLOW !== 'undefined' && FLOW.shared) || {}));   /* escolhas iniciais do protótipo (para o espelho poder voltar a elas) */
-    if (UIS && UIS.sh && typeof FLOW !== 'undefined') { FLOW.shared = FLOW.shared || {}; mergeSh(FLOW.shared, UIS.sh); }
+    var IMGS = null; function unshrink(v, d) { d = d || 0; if (d > 8 || v === null || v === undefined) return v; if (typeof v === 'string') { if (v.indexOf('@@h:') !== 0) return v; if (!IMGS) { IMGS = {}; var seen = 0; (function walk(o, dd) { if (!o || dd > 7 || seen > 4000) return; if (typeof o === 'string') { if (o.indexOf('data:') === 0 && o.length > 300) { IMGS['@@h:' + hashS(o) + ':' + o.length] = o; seen++; } return; } if (typeof o !== 'object' || o.nodeType) return; Object.keys(o).forEach(function (k) { if (k !== 'shared') walk(o[k], dd + 1); }); })(typeof FLOW !== 'undefined' ? FLOW : null, 0); } return IMGS[v] || ''; } if (typeof v !== 'object') return v; if (Array.isArray(v)) return v.map(function (x) { return unshrink(x, d + 1); }); var o = {}; Object.keys(v).forEach(function (k) { o[k] = unshrink(v[k], d + 1); }); return o; }
+    if (UIS && UIS.sh && typeof FLOW !== 'undefined') { FLOW.shared = FLOW.shared || {}; mergeSh(FLOW.shared, unshrink(UIS.sh)); }
+    var takeX = function (k) { var v = (typeof FLOW !== 'undefined' && FLOW.shared) ? FLOW.shared[k] : null; if (typeof FLOW !== 'undefined' && FLOW.shared) delete FLOW.shared[k]; return v || null; };
+    var applyNS = function (b, ns) { ['accState', 'simState', 'colorState', 'collState'].forEach(function (k) { delete b[k]; if (ns && ns.id === b.id && ns[k] != null) b[k] = JSON.parse(JSON.stringify(ns[k])); }); };
+    var applyHX = function (hx) { if (!hx) return; [60, 350, 900].forEach(function (t) { setTimeout(function () { var r = layerEl(); if (!r) return; Object.keys(hx).forEach(function (p) { var el = byPath(r, p); if (el) el.scrollLeft = hx[p]; }); }, t); }); };
+    var NS0 = takeX('__ns'), HX0 = takeX('__hx'); if (NS0) applyNS(base, NS0);
     state.history = []; state.base = base; state.cur = base; renderBase(base, null);
     if (SHEET && sel && byId[sel] && byId[sel].kind === 'overlay') { state.cur = byId[sel]; renderOverlay(byId[sel]); }
     clearAuto();   /* telas de carregamento avançam sozinhas: na página estática ficam paradas */
     updateChrome();
-    if (UIS && !SHEET) { clearTimeout(stT); settling = false; curBase = base.id; PRIS = snapUI(); applyUI(); setTimeout(applyUI, 250); setTimeout(applyUI, 700); tok = Q.get('sel') || ''; }
+    if (UIS && !SHEET) { clearTimeout(stT); settling = false; curBase = base.id; PRIS = snapUI(); applyUI(); setTimeout(applyUI, 250); setTimeout(applyUI, 700); tok = Q.get('sel') || ''; } applyHX(HX0);
     /* espelho ao vivo: o painel chama isto a cada escolha do participante (valor de crédito, prazo, lista aberta...) em vez de recarregar o arquivo inteiro */
     window.HSF_SETUI = function (u) {
       if (SHEET) return; UIS = (u && (u.d || u.sh)) ? u : null;
-      if (typeof FLOW !== 'undefined') { FLOW.shared = FLOW.shared || {}; Object.keys(FLOW.shared).forEach(function (k) { delete FLOW.shared[k]; }); mergeSh(FLOW.shared, JSON.parse(JSON.stringify(SH0))); if (UIS && UIS.sh) mergeSh(FLOW.shared, UIS.sh); }
+      if (typeof FLOW !== 'undefined') { FLOW.shared = FLOW.shared || {}; Object.keys(FLOW.shared).forEach(function (k) { delete FLOW.shared[k]; }); mergeSh(FLOW.shared, JSON.parse(JSON.stringify(SH0))); if (UIS && UIS.sh) mergeSh(FLOW.shared, unshrink(UIS.sh)); }
+      var ns = takeX('__ns'), hx = takeX('__hx'); applyNS(base, ns);
       state.history = []; state.base = base; state.cur = base; renderBase(base, null); clearAuto(); updateChrome();
-      clearTimeout(stT); settling = false; curBase = base.id; PRIS = snapUI(); applyUI(); setTimeout(applyUI, 250); setTimeout(applyUI, 700); tok = '';
+      clearTimeout(stT); settling = false; curBase = base.id; PRIS = snapUI(); applyUI(); setTimeout(applyUI, 250); setTimeout(applyUI, 700); tok = ''; applyHX(hx);
     };
   } else {
     var st0 = Q.get('start');
